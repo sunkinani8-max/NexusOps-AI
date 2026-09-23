@@ -1,15 +1,24 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from datetime import datetime
+
+from database import Base, engine, get_db, Task
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="NexusOps AI",
     description="Intelligent Business Workflow Automation Platform",
-    version="1.0.0"
+    version="2.0.0"
 )
 
-# Allow the React frontend to communicate with FastAPI
+# -----------------------------
+# CORS
+# -----------------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,13 +40,6 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     status: str
-
-
-# -----------------------------
-# TEMPORARY DATABASE
-# -----------------------------
-
-tasks = []
 
 
 # -----------------------------
@@ -120,9 +122,26 @@ def health():
 # -----------------------------
 
 @app.get("/tasks")
-def get_tasks():
+def get_tasks(db: Session = Depends(get_db)):
 
-    return tasks
+    tasks = db.query(Task).order_by(Task.id.desc()).all()
+
+    return [
+        {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "priority": task.priority,
+            "department": task.department,
+            "status": task.status,
+            "created_at": (
+                task.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                if task.created_at
+                else None
+            )
+        }
+        for task in tasks
+    ]
 
 
 # -----------------------------
@@ -130,25 +149,39 @@ def get_tasks():
 # -----------------------------
 
 @app.post("/tasks")
-def create_task(task: TaskCreate):
+def create_task(
+    task: TaskCreate,
+    db: Session = Depends(get_db)
+):
 
     department = classify_task(task.description)
 
-    new_task = {
-        "id": len(tasks) + 1,
-        "title": task.title,
-        "description": task.description,
-        "priority": task.priority,
-        "department": department,
-        "status": "Pending",
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    new_task = Task(
+        title=task.title,
+        description=task.description,
+        priority=task.priority,
+        department=department,
+        status="Pending",
+        created_at=datetime.now()
+    )
 
-    tasks.append(new_task)
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
 
     return {
         "message": "Task created successfully",
-        "task": new_task
+        "task": {
+            "id": new_task.id,
+            "title": new_task.title,
+            "description": new_task.description,
+            "priority": new_task.priority,
+            "department": new_task.department,
+            "status": new_task.status,
+            "created_at": new_task.created_at.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        }
     }
 
 
@@ -157,19 +190,37 @@ def create_task(task: TaskCreate):
 # -----------------------------
 
 @app.put("/tasks/{task_id}")
-def update_task(task_id: int, task: TaskUpdate):
+def update_task(
+    task_id: int,
+    task: TaskUpdate,
+    db: Session = Depends(get_db)
+):
 
-    for item in tasks:
+    item = db.query(Task).filter(Task.id == task_id).first()
 
-        if item["id"] == task_id:
+    if not item:
+        return {
+            "message": "Task not found"
+        }
 
-            item["status"] = task.status
+    item.status = task.status
 
-            return {
-                "message": "Task updated successfully",
-                "task": item
-            }
+    db.commit()
+    db.refresh(item)
 
     return {
-        "message": "Task not found"
+        "message": "Task updated successfully",
+        "task": {
+            "id": item.id,
+            "title": item.title,
+            "description": item.description,
+            "priority": item.priority,
+            "department": item.department,
+            "status": item.status,
+            "created_at": (
+                item.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                if item.created_at
+                else None
+            )
+        }
     }
