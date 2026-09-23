@@ -1,539 +1,166 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const API = "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
+const demoLog = `[INFO] Scanning for projects...
+[ERROR] Failed to execute goal on project billing-service
+[ERROR] DependencyResolutionException: Could not resolve artifact
+[ERROR] BUILD FAILURE`;
+
+async function api(path, options = {}) {
+  const response = await fetch(`${API}${path}`, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Request failed");
+  return data;
+}
 
 function App() {
-
+  const [activeView, setActiveView] = useState("overview");
   const [tasks, setTasks] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [builds, setBuilds] = useState([]);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("Medium");
-  const [loading, setLoading] = useState(false);
 
-  const loadTasks = async () => {
+  const [projectName, setProjectName] = useState("billing-service");
+  const [repoUrl, setRepoUrl] = useState("https://github.com/example/billing-service");
+  const [projectFiles, setProjectFiles] = useState("pom.xml, src/main/java/App.java, src/test/java/AppTest.java, .github/workflows/build.yml");
+  const [projectAnalysis, setProjectAnalysis] = useState(null);
 
+  const [logText, setLogText] = useState(demoLog);
+  const [buildAnalysis, setBuildAnalysis] = useState(null);
+  const [errorText, setErrorText] = useState("Could not resolve artifact com.example:payments-core:jar:2.1.0");
+  const [errorAnalysis, setErrorAnalysis] = useState(null);
+  const [githubUrl, setGithubUrl] = useState("https://github.com/sunkinani8-max/NexusOps-AI");
+  const [githubData, setGithubData] = useState(null);
+
+  const loadData = async () => {
     try {
-
-      const response = await fetch(`${API}/tasks`);
-
-      const data = await response.json();
-
-      setTasks(data);
-
+      const [taskData, projectData, buildData] = await Promise.all([
+        api("/tasks"),
+        api("/projects"),
+        api("/builds"),
+      ]);
+      setTasks(taskData);
+      setProjects(projectData);
+      setBuilds(buildData);
     } catch (error) {
-
-      console.error("Error loading tasks:", error);
-
+      setNotice(error.message);
     }
-
   };
 
+  useEffect(() => { loadData(); }, []);
 
-  useEffect(() => {
-
-    loadTasks();
-
-  }, []);
-
+  const stats = useMemo(() => ({
+    requests: tasks.length,
+    active: tasks.filter((task) => task.status !== "Completed").length,
+    projects: projects.length,
+    failedBuilds: builds.filter((build) => build.status === "Failed").length,
+  }), [tasks, projects, builds]);
 
   const createTask = async (event) => {
-  event.preventDefault();
-
-  if (!title.trim() || !description.trim()) {
-    alert("Please enter a title and description.");
-    return;
-  }
-
-  setLoading(true);
-
-  const requestData = {
-    title: title.trim(),
-    description: description.trim(),
-    priority: priority
+    event.preventDefault();
+    if (!title.trim() || !description.trim()) return setNotice("Enter both a request title and description.");
+    setBusy(true);
+    try {
+      await api("/tasks", { method: "POST", body: JSON.stringify({ title, description, priority }) });
+      setTitle(""); setDescription(""); setPriority("Medium"); setNotice("Request routed successfully."); await loadData();
+    } catch (error) { setNotice(error.message); } finally { setBusy(false); }
   };
-
-  console.log("Sending to NexusOps:", requestData);
-
-  try {
-    const response = await fetch("http://127.0.0.1:8000/tasks", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(requestData)
-    });
-
-    console.log("Backend status:", response.status);
-
-    const data = await response.json();
-
-    console.log("Backend response:", data);
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail
-          ? JSON.stringify(data.detail)
-          : "Backend rejected the request"
-      );
-    }
-
-    setTitle("");
-    setDescription("");
-    setPriority("Medium");
-
-    await loadTasks();
-
-  } catch (error) {
-    console.error("NexusOps error:", error);
-
-    alert(
-      "NexusOps request failed.\n\n" +
-      error.message
-    );
-
-  } finally {
-    setLoading(false);
-  }
-};
-
 
   const updateTask = async (id, status) => {
-
-    try {
-
-     const response = await fetch(
-  `${API}/tasks/${id}`,
-  {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      status: status
-    })
-  }
-);
-      if (!response.ok) {
-
-        throw new Error("Failed to update task");
-
-      }
-
-      await loadTasks();
-
-    } catch (error) {
-
-      console.error(error);
-
-      alert("Could not update the task.");
-
-    }
-
+    try { await api(`/tasks/${id}`, { method: "PUT", body: JSON.stringify({ status }) }); await loadData(); }
+    catch (error) { setNotice(error.message); }
   };
 
+  const connectProject = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await api("/projects", { method: "POST", body: JSON.stringify({ name: projectName, repository_url: repoUrl, language: "Java", build_tool: "Maven" }) });
+      setNotice("Project connected. Ready for analysis.");
+      await loadData();
+      setProjectAnalysis({ project: data.project, analysis: null });
+    } catch (error) { setNotice(error.message); } finally { setBusy(false); }
+  };
+
+  const analyzeProject = async () => {
+    if (!projects[0]) return setNotice("Connect a project first.");
+    setBusy(true);
+    try {
+      const data = await api("/projects/analyze", { method: "POST", body: JSON.stringify({ project_id: projects[0].id, files: projectFiles.split(",").map((file) => file.trim()).filter(Boolean) }) });
+      setProjectAnalysis(data); setNotice("Project analysis completed."); await loadData();
+    } catch (error) { setNotice(error.message); } finally { setBusy(false); }
+  };
+
+  const analyzeBuild = async () => {
+    setBusy(true);
+    try {
+      const data = await api("/builds/analyze", { method: "POST", body: JSON.stringify({ project_id: projects[0]?.id || null, log_text: logText }) });
+      setBuildAnalysis(data); setNotice("Build log analyzed."); await loadData();
+    } catch (error) { setNotice(error.message); } finally { setBusy(false); }
+  };
+
+  const explainError = async () => {
+    setBusy(true);
+    try { const data = await api("/ai/explain", { method: "POST", body: JSON.stringify({ error_text: errorText }) }); setErrorAnalysis(data.analysis); setNotice("AI-style explanation generated."); }
+    catch (error) { setNotice(error.message); } finally { setBusy(false); }
+  };
+
+  const inspectGithub = async () => {
+    setBusy(true);
+    try { const data = await api(`/github/inspect?repo_url=${encodeURIComponent(githubUrl)}`); setGithubData(data); setNotice("GitHub repository inspected."); }
+    catch (error) { setNotice(error.message); } finally { setBusy(false); }
+  };
 
   return (
-
-    <div className="app">
-
-      <header className="header">
-
-        <div>
-
-          <h1>NexusOps AI</h1>
-
-          <p>
-            Intelligent Business Workflow Platform
-          </p>
-
-        </div>
-
-        <div className="online">
-          ● System Online
-        </div>
-
-      </header>
-
-
-      <main>
-
-        <section className="hero">
-
-          <div>
-
-            <p className="eyebrow">
-              AI OPERATIONS PLATFORM
-            </p>
-
-            <h2>
-              Automate your business workflows.
-            </h2>
-
-            <p className="hero-text">
-              NexusOps AI receives business requests,
-              analyzes them and automatically routes
-              them to the appropriate department.
-            </p>
-
-          </div>
-
-        </section>
-
-
-        <section className="dashboard">
-
-
-          <div className="card">
-
-            <div className="card-header">
-
-              <div>
-
-                <h2>Create Request</h2>
-
-                <p>
-                  Submit a new operational request.
-                </p>
-
-              </div>
-
-            </div>
-
-
-            <form onSubmit={createTask}>
-
-              <label>
-                Request Title
-              </label>
-
-              <input
-                type="text"
-                placeholder="Example: Laptop not working"
-                value={title}
-                onChange={(event) =>
-                  setTitle(event.target.value)
-                }
-              />
-
-
-              <label>
-                Description
-              </label>
-
-              <textarea
-                placeholder="Describe the request or problem..."
-                value={description}
-                onChange={(event) =>
-                  setDescription(event.target.value)
-                }
-              />
-
-
-              <label>
-                Priority
-              </label>
-
-              <select
-                value={priority}
-                onChange={(event) =>
-                  setPriority(event.target.value)
-                }
-              >
-
-                <option value="Low">
-                  Low
-                </option>
-
-                <option value="Medium">
-                  Medium
-                </option>
-
-                <option value="High">
-                  High
-                </option>
-
-                <option value="Critical">
-                  Critical
-                </option>
-
-              </select>
-
-
-              <button
-                type="submit"
-                disabled={loading}
-              >
-
-                {loading
-                  ? "Creating Request..."
-                  : "Create Request"}
-
-              </button>
-
-            </form>
-
-          </div>
-
-
-          <div className="card">
-
-            <h2>AI Workflow</h2>
-
-            <p className="card-description">
-              Every request passes through the NexusOps
-              workflow engine.
-            </p>
-
-
-            <div className="workflow">
-
-              <div className="workflow-item">
-
-                <span>01</span>
-
-                <div>
-                  <strong>
-                    Request Received
-                  </strong>
-
-                  <small>
-                    New business request
-                  </small>
-                </div>
-
-              </div>
-
-
-              <div className="arrow">
-                ↓
-              </div>
-
-
-              <div className="workflow-item">
-
-                <span>02</span>
-
-                <div>
-                  <strong>
-                    AI Classification
-                  </strong>
-
-                  <small>
-                    Understand the request
-                  </small>
-                </div>
-
-              </div>
-
-
-              <div className="arrow">
-                ↓
-              </div>
-
-
-              <div className="workflow-item">
-
-                <span>03</span>
-
-                <div>
-                  <strong>
-                    Department Detection
-                  </strong>
-
-                  <small>
-                    Identify responsible team
-                  </small>
-                </div>
-
-              </div>
-
-
-              <div className="arrow">
-                ↓
-              </div>
-
-
-              <div className="workflow-item">
-
-                <span>04</span>
-
-                <div>
-                  <strong>
-                    Task Assignment
-                  </strong>
-
-                  <small>
-                    Start the workflow
-                  </small>
-                </div>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </section>
-
-
-        <section className="tasks">
-
-          <div className="section-header">
-
-            <div>
-
-              <p className="eyebrow">
-                OPERATIONS
-              </p>
-
-              <h2>
-                Request Dashboard
-              </h2>
-
-            </div>
-
-            <div className="task-count">
-
-              {tasks.length} Requests
-
-            </div>
-
-          </div>
-
-
-          {tasks.length === 0 ? (
-
-            <div className="empty">
-
-              <div className="empty-icon">
-                📋
-              </div>
-
-              <h3>
-                No requests yet
-              </h3>
-
-              <p>
-                Create your first request above.
-              </p>
-
-            </div>
-
-          ) : (
-
-            <div className="task-list">
-
-              {tasks.map((task) => (
-
-                <div
-                  className="task"
-                  key={task.id}
-                >
-
-                  <div className="task-main">
-
-                    <div className="task-title-row">
-
-                      <h3>
-                        {task.title}
-                      </h3>
-
-                      <span
-                        className={`status status-${task.status
-                          .toLowerCase()
-                          .replace(" ", "-")}`}
-                      >
-                        {task.status}
-                      </span>
-
-                    </div>
-
-
-                    <p>
-                      {task.description}
-                    </p>
-
-
-                    <div className="tags">
-
-                      <span>
-                        Department: {task.department}
-                      </span>
-
-                      <span>
-                        Priority: {task.priority}
-                      </span>
-
-                      <span>
-                        Created: {task.created_at}
-                      </span>
-
-                    </div>
-
-                  </div>
-
-
-                  <div className="actions">
-
-                    {task.status === "Pending" && (
-
-                      <button
-                        onClick={() =>
-                          updateTask(
-                            task.id,
-                            "In Progress"
-                          )
-                        }
-                      >
-                        Start
-                      </button>
-
-                    )}
-
-
-                    {task.status !== "Completed" && (
-
-                      <button
-                        onClick={() =>
-                          updateTask(
-                            task.id,
-                            "Completed"
-                          )
-                        }
-                      >
-                        Complete
-                      </button>
-
-                    )}
-
-                  </div>
-
-                </div>
-
-              ))}
-
-            </div>
-
-          )}
-
-        </section>
-
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand"><div className="brand-mark">N</div><div><strong>NexusOps</strong><span>AI OPERATIONS PLATFORM</span></div></div>
+        <nav>
+          <button className={activeView === "overview" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("overview")}><span>◈</span> Command Center</button>
+          <button className={activeView === "devops" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("devops")}><span>⌘</span> DevOps Lab</button>
+          <button className={activeView === "requests" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("requests")}><span>≡</span> Requests</button>
+        </nav>
+        <div className="sidebar-bottom"><div className="status-dot"></div><div><strong>System Online</strong><small>API + database connected</small></div></div>
+      </aside>
+
+      <main className="main-content">
+        <header className="topbar"><div><p className="eyebrow">NEXUSOPS AI / WORKSPACE</p><h1>{activeView === "devops" ? "Intelligent DevOps Lab" : activeView === "requests" ? "Operations Requests" : "Command Center"}</h1></div><div className="topbar-meta"><span>v3.0.0</span><span className="live-pill"><i></i> LIVE</span></div></header>
+        {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
+
+        {activeView === "overview" && <>
+          <section className="hero-panel"><div><p className="eyebrow cyan">DETECT → UNDERSTAND → FIX → DEPLOY</p><h2>One intelligent layer across your software delivery lifecycle.</h2><p>Connect projects, inspect build health, understand errors, and route operational work from a single developer-focused platform.</p></div><div className="hero-orbit"><div className="orbit-line"></div><div className="orbit-core">AI<br /><small>RAG READY</small></div><span className="orbit-node n1">CODE</span><span className="orbit-node n2">BUILD</span><span className="orbit-node n3">GIT</span><span className="orbit-node n4">SHIP</span></div></section>
+          <section className="stat-grid"><Stat label="Open Requests" value={stats.active} accent="cyan" /><Stat label="Connected Projects" value={stats.projects} accent="violet" /><Stat label="Build Failures" value={stats.failedBuilds} accent="red" /><Stat label="Total Requests" value={stats.requests} accent="blue" /></section>
+          <section className="dashboard-grid"><div className="panel"><PanelTitle eyebrow="WORKFLOW" title="Request routing" /><form onSubmit={createTask} className="form-grid"><label>Request title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Production access request" /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the operational issue..." /></label><label>Priority<select value={priority} onChange={(event) => setPriority(event.target.value)}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><button className="primary-button" disabled={busy}>{busy ? "Routing..." : "Create & classify request"}</button></form></div><div className="panel"><PanelTitle eyebrow="PIPELINE" title="Intelligent delivery flow" /><div className="pipeline"><PipelineStep number="01" title="Project connected" text="Source and metadata" /><PipelineStep number="02" title="Build analyzed" text="Logs and dependencies" active /><PipelineStep number="03" title="Root cause explained" text="AI-assisted guidance" /><PipelineStep number="04" title="Developer action" text="Fix, test, deploy" /></div></div></section>
+        </>}
+
+        {activeView === "devops" && <>
+          <section className="devops-intro"><div><p className="eyebrow cyan">JAVA / MAVEN / GIT / AI</p><h2>Turn build signals into developer action.</h2><p>These modules give your project a working demonstration of the DevOps architecture shown in the presentation.</p></div><div className="module-badges"><span>Project Analyzer</span><span>Build Assistant</span><span>AI Explainer</span><span>Git Assistant</span></div></section>
+          <section className="devops-grid"><div className="panel"><PanelTitle eyebrow="01 / PROJECT ANALYZER" title="Connect a Java project" /><form onSubmit={connectProject} className="form-grid"><label>Project name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label><label>Repository URL<input value={repoUrl} onChange={(event) => setRepoUrl(event.target.value)} /></label><label>Known files <textarea value={projectFiles} onChange={(event) => setProjectFiles(event.target.value)} /></label><div className="button-row"><button className="primary-button" disabled={busy}>{busy ? "Connecting..." : "Connect project"}</button><button type="button" className="secondary-button" onClick={analyzeProject} disabled={busy || !projects.length}>Analyze structure</button></div></form>{projectAnalysis?.analysis && <AnalysisCard title="Project analysis" data={projectAnalysis.analysis} />}</div><div className="panel"><PanelTitle eyebrow="02 / BUILD ASSISTANT" title="Analyze a Maven log" /><textarea className="log-editor" value={logText} onChange={(event) => setLogText(event.target.value)} /><button className="primary-button full" onClick={analyzeBuild} disabled={busy}>{busy ? "Analyzing..." : "Run build analysis"}</button>{buildAnalysis?.analysis && <AnalysisCard title={`${buildAnalysis.build.status} build`} data={buildAnalysis.analysis} />}</div></section>
+          <section className="devops-grid"><div className="panel"><PanelTitle eyebrow="03 / AI ASSISTANT" title="Explain an error" /><textarea className="log-editor compact" value={errorText} onChange={(event) => setErrorText(event.target.value)} /><button className="violet-button full" onClick={explainError} disabled={busy}>Generate explanation</button>{errorAnalysis && <AnalysisCard title={errorAnalysis.error_type} data={errorAnalysis} violet />}</div><div className="panel"><PanelTitle eyebrow="04 / GIT ASSISTANT" title="Inspect a public GitHub repo" /><label>Repository URL<input value={githubUrl} onChange={(event) => setGithubUrl(event.target.value)} /></label><button className="secondary-button full" onClick={inspectGithub} disabled={busy}>Inspect repository</button>{githubData && <div className="repo-result"><strong>{githubData.name}</strong><p>{githubData.description || "No repository description"}</p><div className="repo-meta"><span>Language: {githubData.language || "—"}</span><span>★ {githubData.stars}</span><span>Issues: {githubData.open_issues}</span></div></div>}</div></section>
+        </>}
+
+        {activeView === "requests" && <section className="panel requests-panel"><PanelTitle eyebrow="OPERATIONS / REQUEST DASHBOARD" title="Track and update requests" /><div className="request-list">{tasks.length === 0 ? <EmptyState /> : tasks.map((task) => <div className="request-row" key={task.id}><div><div className="request-title"><strong>{task.title}</strong><span className={`priority priority-${task.priority.toLowerCase()}`}>{task.priority}</span></div><p>{task.description}</p><small>{task.department} · {task.created_at}</small></div><div className="request-actions"><span className={`status status-${task.status.toLowerCase().replace(" ", "-")}`}>{task.status}</span><select value={task.status} onChange={(event) => updateTask(task.id, event.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>)}</div></section>}
+
+        <footer><span>NEXUSOPS AI // INTELLIGENT DEVOPS AUTOMATION</span><span>JAVA + AI + GIT + MAVEN + DEVOPS</span></footer>
       </main>
-
-
-      <footer>
-
-        <p>
-          NexusOps AI • Intelligent Workflow Automation
-        </p>
-
-      </footer>
-
     </div>
-
   );
-
 }
+
+function Stat({ label, value, accent }) { return <div className={`stat-card ${accent}`}><span>{label}</span><strong>{value}</strong><small>LIVE SIGNAL</small></div>; }
+function PanelTitle({ eyebrow, title }) { return <div className="panel-title"><p className="eyebrow">{eyebrow}</p><h3>{title}</h3></div>; }
+function PipelineStep({ number, title, text, active }) { return <div className={active ? "pipeline-step active" : "pipeline-step"}><span>{number}</span><div><strong>{title}</strong><small>{text}</small></div></div>; }
+function AnalysisCard({ title, data, violet }) { return <div className={violet ? "analysis-card violet" : "analysis-card"}><div className="analysis-heading"><span>{title}</span><b>AI</b></div><p><strong>Root cause:</strong> {data.root_cause}</p><p>{data.explanation}</p><ul>{data.suggestions?.map((item) => <li key={item}>{item}</li>)}</ul></div>; }
+function EmptyState() { return <div className="empty-state"><strong>No requests yet</strong><span>Create a request from the Command Center.</span></div>; }
 
 export default App;
