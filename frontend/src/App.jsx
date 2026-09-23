@@ -102,13 +102,18 @@ function App() {
 
     try {
 
-      const response = await fetch(
-        `${API}/tasks/${id}?status=${encodeURIComponent(status)}`,
-        {
-          method: "PUT"
-        }
-      );
-
+     const response = await fetch(
+  `${API}/tasks/${id}`,
+  {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      status: status
+    })
+  }
+);
       if (!response.ok) {
 
         throw new Error("Failed to update task");
