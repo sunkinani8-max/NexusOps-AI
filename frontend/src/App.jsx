@@ -9,9 +9,10 @@ const demoLog = `[INFO] Scanning for projects...
 [ERROR] BUILD FAILURE`;
 
 async function api(path, options = {}) {
+  const token = localStorage.getItem("nexusops_token");
   const response = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) },
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.detail || "Request failed");
@@ -20,11 +21,17 @@ async function api(path, options = {}) {
 
 function App() {
   const [activeView, setActiveView] = useState("overview");
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("nexusops_user") || "null"); } catch { return null; }
+  });
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileEmail, setProfileEmail] = useState("");
+  const [adminUsers, setAdminUsers] = useState([]);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -57,7 +64,40 @@ function App() {
     }
   };
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    if (user) {
+      loadData();
+      setProfileName(user.username || "");
+      setProfileEmail(user.email || "");
+      if (user.role === "admin") api("/admin/users").then(setAdminUsers).catch((error) => setNotice(error.message));
+    }
+  }, [user]);
+  useEffect(() => {
+    if (!user || !localStorage.getItem("nexusops_token")) return;
+    let cancelled = false;
+    api("/auth/me").then((data) => {
+      if (cancelled) return;
+      const freshUser = data.user;
+      localStorage.setItem("nexusops_user", JSON.stringify(freshUser));
+      setUser((current) => current && JSON.stringify(current) === JSON.stringify(freshUser) ? current : freshUser);
+    }).catch((error) => {
+      if (!cancelled && /session expired|invalid|account not found|log in/i.test(error.message)) logout();
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleAuthSuccess = (data) => {
+    localStorage.setItem("nexusops_token", data.access_token);
+    localStorage.setItem("nexusops_user", JSON.stringify(data.user));
+    setUser(data.user);
+    setNotice("Welcome to NexusOps AI.");
+  };
+
+  const logout = () => {
+    localStorage.removeItem("nexusops_token");
+    localStorage.removeItem("nexusops_user");
+    setUser(null); setTasks([]); setProjects([]); setBuilds([]); setNotice("");
+  };
 
   const stats = useMemo(() => ({
     requests: tasks.length,
@@ -115,11 +155,38 @@ function App() {
     catch (error) { setNotice(error.message); } finally { setBusy(false); }
   };
 
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await api("/auth/me", { method: "PUT", body: JSON.stringify({ username: profileName, email: profileEmail }) });
+      const updated = { ...user, ...data.user };
+      localStorage.setItem("nexusops_user", JSON.stringify(updated));
+      setUser(updated);
+      setNotice("Profile updated successfully.");
+    } catch (error) { setNotice(error.message); } finally { setBusy(false); }
+  };
+
+  const updateRole = async (id, role) => {
+    try {
+      const data = await api(`/admin/users/${id}/role`, { method: "PUT", body: JSON.stringify({ role }) });
+      setAdminUsers((items) => items.map((item) => item.id === id ? { ...item, ...data.user } : item));
+      if (user.id === id) {
+        const updated = { ...user, role: data.user.role };
+        localStorage.setItem("nexusops_user", JSON.stringify(updated));
+        setUser(updated);
+      }
+      setNotice("User role updated.");
+    } catch (error) { setNotice(error.message); }
+  };
+
   const inspectGithub = async () => {
     setBusy(true);
     try { const data = await api(`/github/inspect?repo_url=${encodeURIComponent(githubUrl)}`); setGithubData(data); setNotice("GitHub repository inspected."); }
     catch (error) { setNotice(error.message); } finally { setBusy(false); }
   };
+
+  if (!user) return <AuthScreen onSuccess={handleAuthSuccess} />;
 
   return (
     <div className="app-shell">
@@ -129,12 +196,14 @@ function App() {
           <button className={activeView === "overview" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("overview")}><span>◈</span> Command Center</button>
           <button className={activeView === "devops" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("devops")}><span>⌘</span> DevOps Lab</button>
           <button className={activeView === "requests" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("requests")}><span>≡</span> Requests</button>
+          <button className={activeView === "profile" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("profile")}><span>◉</span> My Profile</button>
+          {user.role === "admin" && <button className={activeView === "admin" ? "nav-item active" : "nav-item"} onClick={() => setActiveView("admin")}><span>♙</span> Admin Users</button>}
         </nav>
         <div className="sidebar-bottom"><div className="status-dot"></div><div><strong>System Online</strong><small>API + database connected</small></div></div>
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><div><p className="eyebrow">NEXUSOPS AI / WORKSPACE</p><h1>{activeView === "devops" ? "Intelligent DevOps Lab" : activeView === "requests" ? "Operations Requests" : "Command Center"}</h1></div><div className="topbar-meta"><span>v3.0.0</span><span className="live-pill"><i></i> LIVE</span></div></header>
+        <header className="topbar"><div><p className="eyebrow">NEXUSOPS AI / WORKSPACE</p><h1>{activeView === "devops" ? "Intelligent DevOps Lab" : activeView === "requests" ? "Operations Requests" : activeView === "profile" ? "My Profile" : activeView === "admin" ? "User Administration" : "Command Center"}</h1></div><div className="topbar-meta"><span className="account-name">{user.username}</span><button className="logout-button" onClick={logout}>Log out</button><span>v3.0.0</span><span className="live-pill"><i></i> LIVE</span></div></header>
         {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
 
         {activeView === "overview" && <>
@@ -151,10 +220,91 @@ function App() {
 
         {activeView === "requests" && <section className="panel requests-panel"><PanelTitle eyebrow="OPERATIONS / REQUEST DASHBOARD" title="Track and update requests" /><div className="request-list">{tasks.length === 0 ? <EmptyState /> : tasks.map((task) => <div className="request-row" key={task.id}><div><div className="request-title"><strong>{task.title}</strong><span className={`priority priority-${task.priority.toLowerCase()}`}>{task.priority}</span></div><p>{task.description}</p><small>{task.department} · {task.created_at}</small></div><div className="request-actions"><span className={`status status-${task.status.toLowerCase().replace(" ", "-")}`}>{task.status}</span><select value={task.status} onChange={(event) => updateTask(task.id, event.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>)}</div></section>}
 
+        {activeView === "profile" && <>
+          <section className="panel account-panel"><PanelTitle eyebrow="ACCOUNT SETTINGS" title="Your profile" /><p className="muted-copy">Update the name and email connected to your NexusOps account.</p><form onSubmit={saveProfile} className="form-grid profile-form"><label>Username<input required minLength="2" maxLength="60" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label><label>Email address<input required type="email" value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} /></label><label>Account role<input value={user.role || "user"} readOnly /></label><button className="primary-button" disabled={busy}>{busy ? "Saving..." : "Save profile"}</button></form><div className="account-summary"><span>Account ID</span><strong>#{user.id}</strong><span>Role</span><strong className="role-chip">{user.role || "user"}</strong></div></section>
+          <ChangePasswordPanel onPasswordChanged={() => { localStorage.removeItem("nexusops_token"); localStorage.removeItem("nexusops_user"); setUser(null); setNotice(""); }} />
+        </>}
+
+        {activeView === "admin" && user.role === "admin" && <section className="panel admin-panel"><PanelTitle eyebrow="ADMINISTRATION / ACCESS CONTROL" title="Manage user roles" /><p className="muted-copy">Only administrators can view this list and change account roles. Keep at least one administrator account.</p><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Joined</th></tr></thead><tbody>{adminUsers.map((account) => <tr key={account.id}><td><strong>{account.username}</strong><small>#{account.id}{account.id === user.id ? " · You" : ""}</small></td><td>{account.email}</td><td><select aria-label={`Role for ${account.username}`} value={account.role} onChange={(event) => updateRole(account.id, event.target.value)}><option value="user">User</option><option value="admin">Admin</option></select></td><td>{account.created_at || "—"}</td></tr>)}</tbody></table>{adminUsers.length === 0 && <EmptyState />}</div></section>}
+
         <footer><span>NEXUSOPS AI // INTELLIGENT DEVOPS AUTOMATION</span><span>JAVA + AI + GIT + MAVEN + DEVOPS</span></footer>
       </main>
     </div>
   );
+}
+
+
+function ChangePasswordPanel({ onPasswordChanged }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault(); setMessage("");
+    if (newPassword.length < 8) return setMessage("New password must contain at least 8 characters.");
+    if (newPassword !== confirmPassword) return setMessage("New passwords do not match.");
+    setBusy(true);
+    try {
+      const result = await api("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) });
+      setMessage(result.message || "Password changed. Please log in again.");
+      setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      window.setTimeout(() => onPasswordChanged(), 900);
+    } catch (error) { setMessage(error.message || "Could not change password."); }
+    finally { setBusy(false); }
+  };
+  return <section className="panel account-panel security-panel"><PanelTitle eyebrow="SECURITY / PASSWORD" title="Change password" /><p className="muted-copy">Use a unique password with at least 8 characters. Changing it signs out existing sessions.</p><form onSubmit={submit} className="form-grid profile-form"><label>Current password<input type="password" autoComplete="current-password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} /></label><label>New password<input type="password" autoComplete="new-password" minLength="8" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength="8" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="primary-button" disabled={busy}>{busy ? "Updating..." : "Change password"}</button></form></section>;
+}
+
+function AuthScreen({ onSuccess }) {
+  const [mode, setMode] = useState("login");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [devToken, setDevToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const submit = async (event) => {
+    event.preventDefault(); setBusy(true); setMessage("");
+    try {
+      if (mode === "forgot") {
+        const data = await api("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+        setDevToken(data.development_reset_token || "");
+        setMessage(data.message || "If the account exists, reset instructions are available.");
+      } else if (mode === "reset") {
+        if (newPassword !== confirmPassword) throw new Error("New passwords do not match.");
+        const data = await api("/auth/reset-password", { method: "POST", body: JSON.stringify({ email, token: resetToken.trim(), new_password: newPassword }) });
+        setMessage(data.message || "Password reset. Please log in."); setMode("login"); setPassword(""); setResetToken(""); setNewPassword(""); setConfirmPassword(""); setDevToken("");
+      } else {
+        if (mode === "register") await api("/auth/register", { method: "POST", body: JSON.stringify({ username, email, password }) });
+        const data = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+        onSuccess(data);
+      }
+    } catch (error) { setMessage(error.message || "Authentication failed."); }
+    finally { setBusy(false); }
+  };
+  const title = mode === "login" ? "Welcome back" : mode === "register" ? "Create your account" : mode === "forgot" ? "Reset your password" : "Choose a new password";
+  return <main className="auth-shell"><section className="auth-card">
+    <div className="brand auth-brand"><div className="brand-mark">N</div><div><strong>NexusOps</strong><span>AI OPERATIONS PLATFORM</span></div></div>
+    <p className="eyebrow cyan">YOUR PRIVATE WORKSPACE</p><h1>{title}</h1>
+    <p className="auth-subtitle">Manage your projects, requests, and build history in one place.</p>
+    {(mode === "login" || mode === "register") && <div className="auth-tabs"><button type="button" className={mode === "login" ? "auth-tab selected" : "auth-tab"} onClick={() => {setMode("login");setMessage("");setDevToken("");}}>Log in</button><button type="button" className={mode === "register" ? "auth-tab selected" : "auth-tab"} onClick={() => {setMode("register");setMessage("");setDevToken("");}}>Create account</button></div>}
+    <form className="form-grid auth-form" onSubmit={submit}>
+      {mode === "register" && <label>Username<input required minLength="2" maxLength="60" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Your name" /></label>}
+      <label>Email<input required type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" /></label>
+      {mode === "login" || mode === "register" ? <label>Password<input required type="password" minLength={mode === "register" ? 8 : 1} autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder={mode === "register" ? "At least 8 characters" : "Your password"} /></label> : null}
+      {mode === "reset" && <><label>Reset token<input required value={resetToken} onChange={e=>setResetToken(e.target.value)} autoComplete="one-time-code" /></label><label>New password<input required type="password" minLength="8" autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} /></label><label>Confirm new password<input required type="password" minLength="8" autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} /></label></>}
+      {message && <p className="auth-message" role="status">{message}</p>}
+      {devToken && <div className="dev-reset-token"><strong>Local development reset token</strong><code>{devToken}</code><button type="button" className="secondary-button" onClick={() => {setResetToken(devToken);setMode("reset");setMessage("");}}>Use this token</button></div>}
+      <button className="primary-button" disabled={busy}>{busy ? "Please wait..." : mode === "login" ? "Log in securely" : mode === "register" ? "Create account" : mode === "forgot" ? "Request reset token" : "Reset password"}</button>
+    </form>
+    {mode === "login" && <button type="button" className="text-button" onClick={() => {setMode("forgot");setMessage("");setDevToken("");}}>Forgot password?</button>}
+    {(mode === "forgot" || mode === "reset") && <div className="auth-links"><button type="button" className="text-button" onClick={() => {setMode("reset");setMessage("");}}>I have a reset token</button><button type="button" className="text-button" onClick={() => {setMode("login");setMessage("");setDevToken("");}}>Back to login</button></div>}
+    <small className="auth-note">Passwords are stored as secure hashes, not plain text.</small>
+  </section></main>;
 }
 
 function Stat({ label, value, accent }) { return <div className={`stat-card ${accent}`}><span>{label}</span><strong>{value}</strong><small>LIVE SIGNAL</small></div>; }

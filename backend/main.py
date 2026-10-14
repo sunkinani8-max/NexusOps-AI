@@ -1,3 +1,10 @@
+from typing import Optional
+import os
+import hashlib
+import secrets
+
+import jwt
+from pwdlib import PasswordHash
 import json
 import re
 from datetime import datetime
@@ -5,11 +12,12 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from database import Base, BuildRun, Project, Task, engine, get_db
+from database import Base, BuildRun, Project, Task, User, engine, get_db
 
 Base.metadata.create_all(bind=engine)
 
@@ -18,6 +26,38 @@ app = FastAPI(
     description="Intelligent DevOps and business workflow automation platform",
     version="3.0.0",
 )
+
+
+
+def migrate_ownership_columns():
+    from sqlalchemy import inspect, text
+    Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        for table in ("tasks", "projects", "build_runs"):
+            if table not in tables:
+                continue
+            columns = {col["name"] for col in inspect(engine).get_columns(table)}
+            if "owner_id" not in columns:
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN owner_id INTEGER"))
+        user_columns = {col["name"] for col in inspect(engine).get_columns("users")} if "users" in tables else set()
+        if "users" in tables and "role" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'user'"))
+        if "users" in tables and "token_version" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"))
+        if "users" in tables and "password_reset_token_hash" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN password_reset_token_hash VARCHAR"))
+        if "users" in tables and "password_reset_expires_at" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN password_reset_expires_at DATETIME"))
+        if "users" in tables:
+            admin_exists = connection.execute(text("SELECT COUNT(*) FROM users WHERE role = 'admin'")).scalar()
+            if not admin_exists:
+                first_user = connection.execute(text("SELECT id FROM users ORDER BY id ASC LIMIT 1")).scalar()
+                if first_user is not None:
+                    connection.execute(text("UPDATE users SET role = 'admin' WHERE id = :uid"), {"uid": first_user})
+
+migrate_ownership_columns()
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +80,7 @@ class TaskUpdate(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
-    repository_url: str | None = None
+    repository_url: Optional[str] = None
     language: str = "Java"
     build_tool: str = "Maven"
 
@@ -51,12 +91,227 @@ class ProjectAnalyze(BaseModel):
 
 
 class BuildAnalyze(BaseModel):
-    project_id: int | None = None
+    project_id: Optional[int] = None
     log_text: str = Field(min_length=5, max_length=30000)
 
 
 class ExplainError(BaseModel):
     error_text: str = Field(min_length=3, max_length=10000)
+
+
+
+
+class RegisterInput(BaseModel):
+    username: str = Field(min_length=2, max_length=60)
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginInput(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+
+class ProfileUpdate(BaseModel):
+    username: str = Field(min_length=2, max_length=60)
+    email: str = Field(min_length=5, max_length=254)
+
+
+class RoleUpdate(BaseModel):
+    role: str = Field(pattern="^(admin|user)$")
+
+
+class ChangePasswordInput(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class ForgotPasswordInput(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+
+
+class ResetPasswordInput(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    token: str = Field(min_length=20, max_length=200)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+
+# Authentication: JWT sessions and Argon2 password hashing.
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "local-development-secret-change-this")
+JWT_ALGORITHM = "HS256"
+password_hash = PasswordHash.recommended()
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def user_dict(user: User) -> dict:
+    return {"id": user.id, "username": user.username, "email": user.email, "role": user.role,
+            "created_at": user.created_at.strftime("%Y-%m-%d %H:%M:%S") if user.created_at else None}
+
+
+def create_access_token(user: User) -> str:
+    from datetime import timedelta
+    now = datetime.utcnow()
+    return jwt.encode({"sub": str(user.id), "email": user.email, "ver": int(user.token_version or 0), "iat": now,
+                       "exp": now + timedelta(days=7)}, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+                     db: Session = Depends(get_db)) -> User:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Please log in to continue.")
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        user_id = int(payload.get("sub", ""))
+    except (jwt.PyJWTError, ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Session expired or invalid. Please log in again.")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Account not found.")
+    if int(payload.get("ver", -1)) != int(user.token_version or 0):
+        raise HTTPException(status_code=401, detail="Your session has been revoked. Please log in again.")
+    return user
+
+
+@app.post("/auth/register")
+def register(payload: RegisterInput, db: Session = Depends(get_db)):
+    username, email = payload.username.strip(), payload.email.strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    if not username:
+        raise HTTPException(status_code=422, detail="Username is required.")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    initial_admin = db.query(User).count() == 0
+    user = User(username=username, email=email, hashed_password=password_hash.hash(payload.password),
+                role="admin" if initial_admin else "user")
+    db.add(user)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Could not create account. Try another email.")
+    db.refresh(user)
+    # Existing pre-account rows are assigned to the first account registering.
+    for model in (Task, Project, BuildRun):
+        db.query(model).filter(model.owner_id.is_(None)).update({model.owner_id: user.id}, synchronize_session=False)
+    db.commit()
+    return {"access_token": create_access_token(user), "token_type": "bearer", "user": user_dict(user)}
+
+
+@app.post("/auth/login")
+def login(payload: LoginInput, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
+    if not user or not password_hash.verify(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+    return {"access_token": create_access_token(user), "token_type": "bearer", "user": user_dict(user)}
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordInput, db: Session = Depends(get_db)):
+    # Always return the same public message to avoid account enumeration.
+    generic = {"message": "If an account exists for that email, password reset instructions will be available."}
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        return generic
+    raw_token = secrets.token_urlsafe(32)
+    user.password_reset_token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    user.password_reset_expires_at = datetime.utcnow() + __import__("datetime").timedelta(minutes=20)
+    db.commit()
+    # No email provider is configured in this local project. Only expose a reset token
+    # when the developer explicitly enables local development mode in backend/.env.
+    if os.getenv("RESET_PASSWORD_DEV_MODE", "false").strip().lower() == "true":
+        return {**generic, "development_reset_token": raw_token, "expires_in_minutes": 20}
+    return generic
+
+
+@app.post("/auth/reset-password")
+def reset_password(payload: ResetPasswordInput, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
+    supplied_hash = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    if (not user or not user.password_reset_token_hash or
+        not secrets.compare_digest(user.password_reset_token_hash, supplied_hash) or
+        not user.password_reset_expires_at or user.password_reset_expires_at < datetime.utcnow()):
+        raise HTTPException(status_code=400, detail="Reset token is invalid or expired. Request a new one.")
+    user.hashed_password = password_hash.hash(payload.new_password)
+    user.password_reset_token_hash = None
+    user.password_reset_expires_at = None
+    user.token_version = int(user.token_version or 0) + 1
+    db.commit()
+    return {"message": "Password reset successfully. Please log in with your new password."}
+
+
+@app.post("/auth/change-password")
+def change_password(payload: ChangePasswordInput, current_user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    if not password_hash.verify(payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    if secrets.compare_digest(payload.current_password, payload.new_password):
+        raise HTTPException(status_code=400, detail="New password must be different from the current password.")
+    current_user.hashed_password = password_hash.hash(payload.new_password)
+    current_user.password_reset_token_hash = None
+    current_user.password_reset_expires_at = None
+    current_user.token_version = int(current_user.token_version or 0) + 1
+    db.commit()
+    return {"message": "Password changed successfully. Please log in again on all devices."}
+
+
+@app.get("/auth/me")
+def auth_me(current_user: User = Depends(get_current_user)):
+    return {"user": user_dict(current_user)}
+
+
+@app.put("/auth/me")
+def update_profile(payload: ProfileUpdate, current_user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    username = payload.username.strip()
+    email = payload.email.strip().lower()
+    if not username:
+        raise HTTPException(status_code=422, detail="Username is required.")
+    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    duplicate = db.query(User).filter(User.email == email, User.id != current_user.id).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="That email is already used by another account.")
+    current_user.username = username
+    current_user.email = email
+    db.commit()
+    db.refresh(current_user)
+    return {"user": user_dict(current_user)}
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required.")
+    return current_user
+
+
+@app.get("/admin/users")
+def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    users = db.query(User).order_by(User.id.asc()).all()
+    return [{"id": u.id, "username": u.username, "email": u.email, "role": u.role,
+             "created_at": u.created_at.strftime("%Y-%m-%d %H:%M:%S") if u.created_at else None}
+            for u in users]
+
+
+@app.put("/admin/users/{user_id}/role")
+def change_user_role(user_id: int, payload: RoleUpdate, admin: User = Depends(require_admin),
+                     db: Session = Depends(get_db)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target.id == admin.id and payload.role != "admin":
+        raise HTTPException(status_code=400, detail="You cannot remove your own administrator role.")
+    if target.role == "admin" and payload.role != "admin":
+        admins = db.query(User).filter(User.role == "admin").count()
+        if admins <= 1:
+            raise HTTPException(status_code=400, detail="At least one administrator must remain.")
+    target.role = payload.role
+    db.commit()
+    db.refresh(target)
+    return {"message": "User role updated.", "user": user_dict(target)}
 
 
 # Existing business workflow classification
@@ -211,8 +466,8 @@ def health():
 
 
 @app.get("/tasks")
-def get_tasks(db: Session = Depends(get_db)):
-    tasks = db.query(Task).order_by(Task.id.desc()).all()
+def get_tasks(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    tasks = db.query(Task).filter(Task.owner_id == current_user.id).order_by(Task.id.desc()).all()
     return [
         {
             "id": task.id,
@@ -228,11 +483,12 @@ def get_tasks(db: Session = Depends(get_db)):
 
 
 @app.post("/tasks")
-def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+def create_task(task: TaskCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     allowed_priorities = {"Low", "Medium", "High", "Critical"}
     if task.priority not in allowed_priorities:
         raise HTTPException(status_code=422, detail=f"Priority must be one of: {', '.join(sorted(allowed_priorities))}")
     new_task = Task(
+        owner_id=current_user.id,
         title=task.title.strip(),
         description=task.description.strip(),
         priority=task.priority,
@@ -255,11 +511,11 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/tasks/{task_id}")
-def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
+def update_task(task_id: int, task: TaskUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     allowed_statuses = {"Pending", "In Progress", "Completed"}
     if task.status not in allowed_statuses:
         raise HTTPException(status_code=422, detail=f"Status must be one of: {', '.join(sorted(allowed_statuses))}")
-    item = db.query(Task).filter(Task.id == task_id).first()
+    item = db.query(Task).filter(Task.id == task_id, Task.owner_id == current_user.id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Task not found")
     item.status = task.status
@@ -277,13 +533,14 @@ def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
 
 
 @app.get("/projects")
-def get_projects(db: Session = Depends(get_db)):
-    return [project_dict(project) for project in db.query(Project).order_by(Project.id.desc()).all()]
+def get_projects(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return [project_dict(project) for project in db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.id.desc()).all()]
 
 
 @app.post("/projects")
-def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
+def create_project(project: ProjectCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     new_project = Project(
+        owner_id=current_user.id,
         name=project.name.strip(),
         repository_url=project.repository_url.strip() if project.repository_url else None,
         language=project.language.strip(),
@@ -298,8 +555,8 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/projects/analyze")
-def analyze_project(payload: ProjectAnalyze, db: Session = Depends(get_db)):
-    project = db.query(Project).filter(Project.id == payload.project_id).first()
+def analyze_project(payload: ProjectAnalyze, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == payload.project_id, Project.owner_id == current_user.id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     analysis = analyze_project_files(payload.files)
@@ -309,7 +566,11 @@ def analyze_project(payload: ProjectAnalyze, db: Session = Depends(get_db)):
 
 
 @app.post("/builds/analyze")
-def analyze_build(payload: BuildAnalyze, db: Session = Depends(get_db)):
+def analyze_build(payload: BuildAnalyze, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if payload.project_id is not None:
+        owned_project = db.query(Project).filter(Project.id == payload.project_id, Project.owner_id == current_user.id).first()
+        if not owned_project:
+            raise HTTPException(status_code=404, detail="Project not found")
     log = payload.log_text.strip()
     failed = bool(re.search(r"BUILD FAILURE|\[ERROR\]|FAILURE", log, re.IGNORECASE))
     result = explain_error_text(log) if failed else {
@@ -320,6 +581,7 @@ def analyze_build(payload: BuildAnalyze, db: Session = Depends(get_db)):
     }
     run = BuildRun(
         project_id=payload.project_id,
+        owner_id=current_user.id,
         status="Failed" if failed else "Passed",
         summary=result["root_cause"],
         error_type=result["error_type"],
@@ -333,20 +595,20 @@ def analyze_build(payload: BuildAnalyze, db: Session = Depends(get_db)):
 
 
 @app.get("/builds")
-def get_builds(project_id: int | None = None, db: Session = Depends(get_db)):
-    query = db.query(BuildRun).order_by(BuildRun.id.desc())
+def get_builds(project_id: Optional[int] = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = db.query(BuildRun).filter(BuildRun.owner_id == current_user.id).order_by(BuildRun.id.desc())
     if project_id:
         query = query.filter(BuildRun.project_id == project_id)
     return [build_dict(run) for run in query.limit(20).all()]
 
 
 @app.post("/ai/explain")
-def explain_error(payload: ExplainError):
+def explain_error(payload: ExplainError, current_user: User = Depends(get_current_user)):
     return {"analysis": explain_error_text(payload.error_text)}
 
 
 @app.get("/github/inspect")
-def inspect_github(repo_url: str):
+def inspect_github(repo_url: str, current_user: User = Depends(get_current_user)):
     parsed = urlparse(repo_url)
     if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
         raise HTTPException(status_code=422, detail="Only public GitHub repository URLs are supported.")

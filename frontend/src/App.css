@@ -73,3 +73,44 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding-top: 
 
 @media (max-width: 980px) { .sidebar { width: 205px; flex-basis: 205px; }.main-content { padding: 25px; }.hero-panel, .devops-intro { align-items: flex-start; flex-direction: column; }.hero-orbit { align-self: center; }.dashboard-grid, .devops-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .app-shell { display: block; }.sidebar { width: 100%; height: auto; padding: 15px; border-right: 0; border-bottom: 1px solid #1f2937; }.brand { padding-bottom: 15px; }.sidebar-bottom { display: none; }nav { display: flex; overflow-x: auto; }.nav-item { white-space: nowrap; }.main-content { padding: 20px 15px; }.stat-grid { grid-template-columns: 1fr 1fr; }.request-row { flex-direction: column; }.request-actions { justify-content: space-between; }footer { flex-direction: column; }.module-badges { width: auto; } }
+
+
+/* NexusOps account screens */
+.auth-shell{min-height:100vh;display:grid;place-items:center;padding:28px;box-sizing:border-box;background:radial-gradient(circle at 15% 15%,rgba(0,229,255,.10),transparent 35%),radial-gradient(circle at 85% 80%,rgba(124,92,255,.12),transparent 35%),#0b0f19;color:#eef3ff}
+.auth-card{width:min(100%,460px);box-sizing:border-box;padding:34px;border:1px solid rgba(130,155,200,.22);border-radius:22px;background:rgba(17,24,39,.96);box-shadow:0 24px 80px rgba(0,0,0,.35)}
+.auth-brand{margin-bottom:32px}.auth-card h1{margin:10px 0;font-size:30px;letter-spacing:-.04em}.auth-subtitle{color:#a8b3c9;line-height:1.6;margin-bottom:22px}
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:5px;border-radius:12px;background:#0b1220;margin:20px 0}
+.auth-tab{border:0;border-radius:9px;padding:11px;background:transparent;color:#a8b3c9;cursor:pointer}.auth-tab.selected{background:#1c2940;color:#fff}
+.auth-form{gap:16px}.auth-form label{display:grid;gap:8px;color:#c8d3e7;font-size:13px}.auth-form input{width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid #303d55;border-radius:10px;background:#0b1220;color:#fff;outline:none}.auth-form input:focus{border-color:#00e5ff}
+.auth-message{margin:0;color:#ff9caa;font-size:13px}.auth-note{display:block;margin-top:20px;color:#8492ac;line-height:1.5}
+.account-name{color:#d7e4fa;font-weight:600}.logout-button{border:1px solid #34425c;border-radius:8px;padding:7px 10px;background:#121b2c;color:#dce7f8;cursor:pointer}.logout-button:hover{border-color:#00e5ff}
+@media(max-width:560px){.auth-card{padding:24px}.auth-card h1{font-size:25px}}
+
+
+/* Profile and administrator management */
+.muted-copy{color:#9aa9c2;line-height:1.6;margin:0 0 22px}
+.account-panel,.admin-panel{max-width:1100px}
+.profile-form{max-width:540px;gap:16px}
+.profile-form label{display:grid;gap:8px;color:#c8d3e7;font-size:13px}
+.profile-form input,.admin-table select{box-sizing:border-box;padding:11px 12px;border:1px solid #303d55;border-radius:9px;background:#0b1220;color:#eef3ff;min-width:0}
+.profile-form input:focus,.admin-table select:focus{outline:none;border-color:#00e5ff}
+.profile-form input[readonly]{opacity:.75;text-transform:capitalize}
+.account-summary{display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-top:1px solid #26334a;margin-top:26px;padding-top:20px;color:#91a0ba;font-size:13px}
+.account-summary strong{color:#eaf2ff;margin-right:18px}
+.role-chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(0,229,255,.1);color:#5deaff!important;text-transform:capitalize}
+.admin-table-wrap{width:100%;overflow-x:auto}
+.admin-table{width:100%;border-collapse:collapse;text-align:left;min-width:640px}
+.admin-table th,.admin-table td{padding:14px 12px;border-bottom:1px solid #26334a;color:#c8d3e7;font-size:13px}
+.admin-table th{color:#8d9db8;text-transform:uppercase;font-size:11px;letter-spacing:.08em}
+.admin-table td strong{display:block;color:#f1f5ff}
+.admin-table td small{display:block;color:#7f8da7;margin-top:5px}
+.admin-table select{min-width:100px;text-transform:capitalize}
+
+
+/* Password and account security */
+.security-panel { margin-top: 18px; }
+.text-button { display: inline-flex; border: 0; background: transparent; color: #00e5ff; cursor: pointer; padding: 10px 0; font: inherit; }
+.text-button:hover { text-decoration: underline; }
+.auth-links { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.dev-reset-token { display: grid; gap: 10px; padding: 13px; border: 1px solid #7c6b2d; border-radius: 10px; background: #211e12; color: #f5df9a; overflow-wrap: anywhere; }
+.dev-reset-token code { white-space: normal; color: #fff5cf; user-select: all; }
