@@ -1,0 +1,170 @@
+{activeView === "overview" && (
+  <section className="project-workspace">
+    <header className="workspace-heading">
+      <div>
+        <p className="eyebrow cyan">WORKSPACE / PROJECTS</p>
+        <h2>Projects</h2>
+        <p className="workspace-subtitle">
+          Manage projects, track delivery progress, and monitor build health.
+        </p>
+      </div>
+      <button
+        className="primary-button"
+        onClick={() => setActiveView("devops")}
+      >
+        + Create Project
+      </button>
+    </header>
+
+    <section className="project-summary">
+      <div>
+        <span>Total Projects</span>
+        <strong>{stats.projects}</strong>
+      </div>
+      <div>
+        <span>Open Requests</span>
+        <strong>{stats.active}</strong>
+      </div>
+      <div>
+        <span>Build Failures</span>
+        <strong>{stats.failedBuilds}</strong>
+      </div>
+      <div>
+        <span>Total Requests</span>
+        <strong>{stats.requests}</strong>
+      </div>
+    </section>
+
+    <div className="workspace-layout">
+      <section className="project-board">
+        <div className="board-column-heading">
+          <span className="column-dot paused-dot" />
+          <strong>Connected Projects</strong>
+          <span className="column-count">{projects.length}</span>
+        </div>
+
+        {projects.length === 0 ? (
+          <div className="project-empty">
+            <span className="empty-icon">＋</span>
+            <strong>No projects yet</strong>
+            <p>Connect your first repository to get started.</p>
+            <button
+              className="secondary-button"
+              onClick={() => setActiveView("devops")}
+            >
+              Connect Project
+            </button>
+          </div>
+        ) : (
+          <div className="project-card-grid">
+            {projects.map((project, index) => (
+              <article className="project-card" key={project.id}>
+                <div className="project-card-top">
+                  <span className={`project-tag tag-${index % 3}`}>
+                    {project.language || "DevOps"}
+                  </span>
+                  <span className="project-menu">•••</span>
+                </div>
+
+                <h3>{project.name}</h3>
+
+                <p className="project-description">
+                  {project.repository_url || "Repository connected"}
+                </p>
+
+                <div className="project-card-meta">
+                  <span>{project.build_tool || "Build pipeline"}</span>
+                  <span>#{project.id}</span>
+                </div>
+
+                <div className="project-progress-track">
+                  <span />
+                </div>
+
+                <div className="project-card-bottom">
+                  <span>Repository connected</span>
+                  <span className="project-health">● Connected</span>
+                </div>
+
+                <button
+                  className="project-open-button"
+                  onClick={() => setActiveView("devops")}
+                >
+                  Open DevOps Lab →
+                </button>
+              </article>
+            ))}
+
+            <button
+              className="add-project-card"
+              onClick={() => setActiveView("devops")}
+            >
+              ＋ Connect another project
+            </button>
+          </div>
+        )}
+      </section>
+
+      <aside className="workspace-right-panel">
+        <div className="panel-title">
+          <p className="eyebrow">DELIVERY OVERVIEW</p>
+          <h3>System Activity</h3>
+        </div>
+
+        <div className="activity-ring">
+          <div>
+            <strong>{stats.projects}</strong>
+            <span>Projects</span>
+          </div>
+        </div>
+
+        <div className="activity-legend">
+          <div>
+            <span className="legend-dot cyan-dot" />
+            Connected
+            <strong>{stats.projects}</strong>
+          </div>
+          <div>
+            <span className="legend-dot violet-dot" />
+            Open Requests
+            <strong>{stats.active}</strong>
+          </div>
+          <div>
+            <span className="legend-dot red-dot" />
+            Build Failures
+            <strong>{stats.failedBuilds}</strong>
+          </div>
+        </div>
+
+        <div className="right-panel-divider" />
+
+        <p className="eyebrow">QUICK ACTIONS</p>
+
+        <button
+          className="quick-action"
+          onClick={() => setActiveView("requests")}
+        >
+          <span>≡</span>
+          <div>
+            <strong>View Requests</strong>
+            <small>Track operational work</small>
+          </div>
+          <span>→</span>
+        </button>
+
+        <button
+          className="quick-action"
+          onClick={() => setActiveView("devops")}
+        >
+          <span>⌘</span>
+          <div>
+            <strong>DevOps Lab</strong>
+            <small>Analyze builds and code</small>
+          </div>
+          <span>→</span>
+        </button>
+      </aside>
+    </div>
+  </section>
+  export default App;
+)}

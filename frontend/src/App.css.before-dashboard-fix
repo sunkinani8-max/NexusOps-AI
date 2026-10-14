@@ -1,0 +1,121 @@
+/* ===== NexusOps AI — Modern Dashboard Refresh ===== */
+
+:root {
+  --nx-bg: #090d18;
+  --nx-panel: #111827;
+  --nx-panel-hover: #182237;
+  --nx-border: rgba(148, 163, 184, 0.16);
+  --nx-text: #eef2ff;
+  --nx-muted: #94a3b8;
+  --nx-cyan: #22d3ee;
+  --nx-violet: #8b5cf6;
+}
+
+.app-shell {
+  background:
+    radial-gradient(ellipse at 75% 0%, rgba(79, 70, 229, 0.12), transparent 36%),
+    var(--nx-bg);
+  color: var(--nx-text);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: rgba(11, 16, 30, 0.96);
+  border-right: 1px solid var(--nx-border);
+  backdrop-filter: blur(18px);
+}
+
+.topbar {
+  background: rgba(9, 13, 24, 0.84);
+  border-bottom: 1px solid var(--nx-border);
+  backdrop-filter: blur(16px);
+}
+
+.stat-card,
+.panel,
+.card,
+.dashboard-card {
+  background: linear-gradient(
+    145deg,
+    rgba(22, 32, 52, 0.96),
+    rgba(15, 23, 42, 0.96)
+  );
+  border: 1px solid var(--nx-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  transition: border-color 180ms ease, transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.stat-card:hover,
+.panel:hover,
+.card:hover,
+.dashboard-card:hover {
+  border-color: rgba(34, 211, 238, 0.35);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+button,
+.btn {
+  border-radius: 10px;
+  transition: transform 150ms ease, filter 150ms ease,
+    border-color 150ms ease;
+}
+
+button:hover,
+.btn:hover {
+  filter: brightness(1.1);
+}
+
+button:active,
+.btn:active {
+  transform: scale(0.98);
+}
+
+input,
+select,
+textarea {
+  background: #0b1220;
+  color: var(--nx-text);
+  border: 1px solid var(--nx-border);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--nx-cyan);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.1);
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.025em;
+}
+
+.live-pill {
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  background: rgba(16, 185, 129, 0.09);
+  border-radius: 999px;
+  padding: 5px 10px;
+}
+
+.live-pill i {
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.65);
+}
+
+@media (max-width: 768px) {
+  .app-shell {
+    overflow-x: hidden;
+  }
+
+  .stat-card,
+  .panel,
+  .card,
+  .dashboard-card {
+    border-radius: 12px;
+  }
+}
